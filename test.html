@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bản đồ Thửa đất Phú Quốc - Tìm kiếm</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        
+        /* Box tìm kiếm gọn gàng trở lại */
+        .search-panel {
+            position: absolute;
+            top: 20px;
+            left: 50px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .search-panel input {
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+            outline: none;
+            width: 100px;
+        }
+
+        .search-panel button {
+            padding: 8px 15px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .search-panel button:hover { background-color: #2980b9; }
+
+        /* Bảng hiển thị thông tin */
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            width: 300px;
+            display: none;
+        }
+        .info-panel h3 { margin-top: 0; color: #2c3e50; font-size: 18px; border-bottom: 2px solid #3498db; padding-bottom: 8px;}
+        .info-panel p { margin: 10px 0; font-size: 14px; line-height: 1.5; color: #34495e;}
+        .close-btn { cursor: pointer; color: #e74c3c; float: right; font-weight: bold; font-size: 16px;}
+        .close-btn:hover { color: #c0392b; }
+        
+        /* Loading overlay */
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2000;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading">Đang tải dữ liệu bản đồ...</div>
+
+    <div class="search-panel">
+        <input type="text" id="soToInput" placeholder="Số Tờ (VD: 13)" onkeypress="handleKeyPress(event)">
+        <input type="text" id="soThuaInput" placeholder="Số Thửa (VD: 47)" onkeypress="handleKeyPress(event)">
+        <button onclick="searchParcel()">Tìm kiếm</button>
+    </div>
+
+    <div id="infoPanel" class="info-panel">
+        <span class="close-btn" onclick="closeInfoPanel()">✖</span>
+        <h3>Thông tin thửa đất</h3>
+        <div id="infoContent"></div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        let map;
+        let landData = [];
+        let currentPolygon = null;
+
+        map = L.map('map').setView([10.2289, 103.9573], 11);
+        L.tileLayer('https://mt1.google.com/vt/lyrs=s,h&x={x}&y={y}&z={z}', {
+            maxZoom: 20,
+            attribution: '© Google Maps'
+        }).addTo(map);
+
+        // Tải dữ liệu từ các file JSON
+        const soLuongFile = 3; 
+        const fetchPromises = [];
+
+        for (let i = 1; i <= soLuongFile; i++) {
+            const filePath = `result_polygon/result_polygon/KET_QUA_DC${i}.json`;
+            fetchPromises.push(
+                fetch(filePath).then(response => {
+                    if (!response.ok) throw new Error(`Lỗi tải file: ${filePath}`);
+                    return response.json();
+                })
+            );
+        }
+
+        Promise.all(fetchPromises)
+            .then(dataArrays => {
+                landData = dataArrays.flat();
+                document.getElementById('loading').style.display = 'none';
+                console.log("Đã tải thành công tổng cộng", landData.length, "thửa đất.");
+            })
+            .catch(error => {
+                console.error('Lỗi tải dữ liệu:', error);
+                document.getElementById('loading').innerText = 'Lỗi tải dữ liệu. Vui lòng kiểm tra console.';
+            });
+
+        function searchParcel() {
+            const soTo = document.getElementById('soToInput').value.trim();
+            const soThua = document.getElementById('soThuaInput').value.trim();
+            
+            // Fix cứng Delta theo yêu cầu
+            const FIXED_LAT_DELTA = -0.00097;
+            const FIXED_LON_DELTA = 0.0018;
+            
+            if (!soTo || !soThua) {
+                alert("Vui lòng nhập đầy đủ Số tờ và Số thửa.");
+                return;
+            }
+
+            const foundLand = landData.find(item => {
+                const toBDSach = String(item.ToBD).replace(/\.0$/, '');
+                const tctSach = String(item.TCT).replace(/\.0$/, '');
+                return toBDSach.toLowerCase() === soTo.toLowerCase() && 
+                       tctSach.toLowerCase() === soThua.toLowerCase();
+            });
+
+            if (foundLand) {
+                if (currentPolygon !== null) {
+                    map.removeLayer(currentPolygon);
+                }
+
+                // Tự động cộng/trừ với hằng số delta đã fix cứng
+                const adjustedPolygon = foundLand.polygon.map(coord => {
+                    return [coord[0] + FIXED_LAT_DELTA, coord[1] + FIXED_LON_DELTA];
+                });
+
+                currentPolygon = L.polygon(adjustedPolygon, {
+                    color: '#f1c40f',
+                    weight: 4,
+                    fillColor: '#3498db',
+                    fillOpacity: 0.5
+                }).addTo(map);
+
+                map.fitBounds(currentPolygon.getBounds());
+                showInfoPanel(foundLand);
+            } else {
+                alert(`Không tìm thấy thửa đất: Tờ ${soTo} - Thửa ${soThua}`);
+            }
+        }
+
+        function showInfoPanel(data) {
+            let dienTichFormatted = "0";
+            if(data.DienTich) {
+                dienTichFormatted = parseFloat(data.DienTich).toLocaleString('en-US');
+            }
+
+            const content = `
+                <p><b>Chủ sở hữu:</b> ${data.TenChu || 'Không rõ'}</p>
+                <p><b>Địa chỉ:</b> ${data.Xudong || 'Đang cập nhật'}</p>
+                <p><b>Tờ bản đồ:</b> <span style="color:red; font-weight:bold">${String(data.ToBD).replace(/\.0$/, '')}</span> | <b>Số thửa:</b> <span style="color:red; font-weight:bold">${String(data.TCT).replace(/\.0$/, '')}</span></p>
+                <p><b>Loại đất (LRD):</b> ${data.LRD || '-'}</p>
+                <p><b>Diện tích:</b> ${dienTichFormatted} m²</p>
+            `;
+            
+            document.getElementById('infoContent').innerHTML = content;
+            document.getElementById('infoPanel').style.display = 'block';
+        }
+
+        function closeInfoPanel() {
+            document.getElementById('infoPanel').style.display = 'none';
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === "Enter") {
+                searchParcel();
+            }
+        }
+    </script>
+</body>
+</html>
